@@ -123,25 +123,33 @@ class Detector(object):
     def set_config(self, model_dir):
         return PredictConfig(model_dir)
 
-    def preprocess(self, image_list):
-        preprocess_ops = []
-        for op_info in self.pred_config.preprocess_infos:
-            new_op_info = op_info.copy()
-            op_type = new_op_info.pop('type')
-            preprocess_ops.append(eval(op_type)(**new_op_info))
+    def preprocess(self, image_list, warmup=False):
+        repeats = 1 if warmup else 100
+        self.det_times.preprocess_time_s.start()
+        for i in range(repeats):
+            preprocess_ops = []
+            if warmup:
+                print(self.pred_config.preprocess_infos)
+            for op_info in self.pred_config.preprocess_infos:
+                new_op_info = op_info.copy()
+                op_type = new_op_info.pop('type')
+                if warmup:
+                    print(eval(op_type)(**new_op_info))
+                preprocess_ops.append(eval(op_type)(**new_op_info))
+            input_im_lst = []
+            input_im_info_lst = []
+            for im_path in image_list:
+                im, im_info = preprocess(im_path, preprocess_ops)
+                input_im_lst.append(im)
+                input_im_info_lst.append(im_info)
 
-        input_im_lst = []
-        input_im_info_lst = []
-        for im_path in image_list:
-            im, im_info = preprocess(im_path, preprocess_ops)
-            input_im_lst.append(im)
-            input_im_info_lst.append(im_info)
+        self.det_times.preprocess_time_s.end(repeats=repeats, accumulative=False)
         inputs = create_inputs(input_im_lst, input_im_info_lst)
         input_names = self.predictor.get_input_names()
+        
         for i in range(len(input_names)):
             input_tensor = self.predictor.get_input_handle(input_names[i])
             input_tensor.copy_from_cpu(inputs[input_names[i]])
-
         return inputs
 
     def postprocess(self, inputs, result):
@@ -226,10 +234,8 @@ class Detector(object):
             batch_image_list = image_list[start_index:end_index]
             if run_benchmark:
                 # preprocess
-                inputs = self.preprocess(batch_image_list)  # warmup
-                self.det_times.preprocess_time_s.start()
+                inputs = self.preprocess(batch_image_list, warmup=True)  # warmup
                 inputs = self.preprocess(batch_image_list)
-                self.det_times.preprocess_time_s.end()
 
                 # model prediction
                 result = self.predict(repeats=50)  # warmup
